@@ -31,17 +31,18 @@ double brightness(png_bytep p, int ch_sz)
 	u_int16_t g = *(p + ch_sz);
 	u_int16_t b = *(p + ch_sz * 2);
 	// u_int16_t a = *(p + ch_sz * 3);
-	return 0.2126*r + 0.7152*g + 0.0722*b;
+	double brightness = 0.2126*r + 0.7152*g + 0.0722*b;
+	return brightness;
 }
 
 int qualified_gt(png_bytep p, int ch_sz, struct options *opt)
 {
-	return brightness(p, ch_sz) > opt->gt_value;
+	return brightness(p, ch_sz) >= opt->gt_value;
 }
 
 int qualified_lt(png_bytep p, int ch_sz, struct options *opt)
 {
-	return brightness(p, ch_sz) < opt->lt_value;
+	return brightness(p, ch_sz) <= opt->lt_value;
 }
 
 int compare_left(double left, double right)
@@ -121,27 +122,55 @@ void read_image(struct image *i, struct options *opt)
 	}
 }
 
-// bubbles~~ ^-^
-// todo: not bubbles
+/* should be merge sort... */
 void sort_interval(
 	png_bytep src, 
 	png_bytep dest, 
-	int len, int px_sz, int ch_sz,
-	struct options *opt)
+	int len, int px_sz,
+	int ch_sz, struct options *opt)
 {
-	int sorted = 0;
-	double left, right;
-	png_byte tmp[px_sz];
-	int i, lim = (len - 1) * px_sz;
-	while (!(sorted++)) for (i = 0; i < lim; i += px_sz) {
-		right = brightness(dest + i + px_sz, ch_sz);
-		left = brightness(dest + i, ch_sz);
-		if (opt->compare(left, right)) {
-			sorted = 0;
-			memcpy(tmp, dest + i, px_sz);
-			memcpy(dest + i, dest + i + px_sz, px_sz);
-			memcpy(dest + i + px_sz, tmp, px_sz);
+	if (len <= 1) return;
+
+	/*
+	 * len needs to be pixels!
+	 * half_len needs to be pixels!
+	 * h needs to be bytes!
+	 */
+
+	double bl, br; 
+	int half_len = len / 2;
+	int h = half_len * px_sz;
+	int i = 0, l = 0, r = h;
+
+	sort_interval(dest, src, half_len, px_sz, ch_sz, opt);
+	sort_interval(
+		dest + h, src + h, 
+		half_len + (len % 2),
+		px_sz, ch_sz, opt);
+
+	while (l < h && r < len * px_sz) {
+		bl = brightness(src + l, ch_sz);
+		br = brightness(src + r, ch_sz);
+		if (opt->compare(bl, br)) { // <
+			memcpy(dest + i, src + l, px_sz);
+			l += px_sz;
+		} else {
+			memcpy(dest + i, src + r, px_sz);
+			r += px_sz;
 		}
+		i += px_sz;
+	}
+
+	while (l < h) {
+		memcpy(dest + i, src + l, px_sz);
+		l += px_sz;
+		i += px_sz;
+	}
+
+	while (r < len * px_sz) {
+		memcpy(dest + i, src + r, px_sz);
+		r += px_sz;
+		i += px_sz;
 	}
 }
 
@@ -180,7 +209,6 @@ void sort_pixels_row(
 			dest->buffer + offset,
 			len, px_sz, ch_sz, opt
 		);
-
 		i_start = -1;
 	}
 }
