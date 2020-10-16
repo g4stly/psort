@@ -6,7 +6,7 @@ LIBDIR	= lib
 INCLUDE	= include
 
 TARGET 	= build/psort
-SOURCES = src/main.c src/util.c
+SOURCES = src/main.c src/options.c src/util.c
 OBJECTS	= $(SOURCES:.c=.o)
 
 all: $(TARGET)

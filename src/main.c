@@ -6,104 +6,14 @@
 #include <stdio.h>
 #include <png.h>
 
+#include "options.h"
 #include "util.h"
-
-struct options {
-	int flags;
-	int format;
-	int gt_value;
-	int lt_value;
-	const char *input_file;
-	const char *output_file;
-	int (*compare)(double, double);
-	int (*pipeline[2])(png_bytep, int, struct options *);
-	int pipeline_len;
-};
 
 struct image {
 	png_image png;
 	png_bytep buffer;
 };
 
-double brightness(png_bytep p, int ch_sz)
-{
-	u_int16_t r = *p;
-	u_int16_t g = *(p + ch_sz);
-	u_int16_t b = *(p + ch_sz * 2);
-	// u_int16_t a = *(p + ch_sz * 3);
-	double brightness = 0.2126*r + 0.7152*g + 0.0722*b;
-	return brightness;
-}
-
-int qualified_gt(png_bytep p, int ch_sz, struct options *opt)
-{
-	return brightness(p, ch_sz) >= opt->gt_value;
-}
-
-int qualified_lt(png_bytep p, int ch_sz, struct options *opt)
-{
-	return brightness(p, ch_sz) <= opt->lt_value;
-}
-
-int compare_left(double left, double right)
-{
-	return left > right;
-}
-
-int compare_right(double left, double right)
-{
-	return left < right;
-}
-
-void parse_options(int argc, char **argv, struct options *opt)
-{
-	char c;
-	int sort_right = 1;
-	while ((c = getopt(argc, argv, "o:g:l:r12")) > 0) switch (c) {
-	case 'o':
-		opt->output_file = optarg;
-		break;
-	case 'g':
-		if (opt->pipeline_len < 2) {
-			opt->pipeline[opt->pipeline_len++] = qualified_gt;
-		}
-		opt->gt_value = atoi(optarg);
-		break;
-	case 'l':
-		if (opt->pipeline_len < 2) {
-			opt->pipeline[opt->pipeline_len++] = qualified_lt;
-		}
-		opt->lt_value = atoi(optarg);
-		break;
-	case 'r':
-		sort_right = !sort_right;
-		break;
-	case '1':
-		opt->format = PNG_FORMAT_RGBA;
-		opt->flags = 0;
-		break;
-	case '2':
-		opt->format = PNG_FORMAT_LINEAR_RGB_ALPHA;
-		opt->flags |= PNG_FORMAT_FLAG_LINEAR;
-		break;
-	default:
-		die("usage: todo\n");
-		break;
-	}
-
-	if (!opt->output_file || optind >= argc) {
-		die("usage: todo\n");
-	}
-	if (opt->pipeline_len < 1) {
-		die("what the fuck are you doing....\n");
-	}
-	if (!opt->format) {
-		opt->format = PNG_FORMAT_RGBA;
-	}
-
-	opt->input_file = argv[optind];
-	opt->compare = sort_right ? compare_right : compare_left;
-}
 
 void read_image(struct image *i, struct options *opt)
 {
@@ -123,11 +33,9 @@ void read_image(struct image *i, struct options *opt)
 }
 
 /* should be merge sort... */
-void sort_interval(
-	png_bytep src, 
-	png_bytep dest, 
-	int len, int px_sz,
-	int ch_sz, struct options *opt)
+void sort_interval(png_bytep src, png_bytep dest,
+	int len, int px_sz, int ch_sz, 
+	struct options *opt)
 {
 	if (len <= 1) return;
 
@@ -139,6 +47,7 @@ void sort_interval(
 
 	double bl, br; 
 	int half_len = len / 2;
+	int lenp = len * px_sz;
 	int h = half_len * px_sz;
 	int i = 0, l = 0, r = h;
 
@@ -148,10 +57,10 @@ void sort_interval(
 		half_len + (len % 2),
 		px_sz, ch_sz, opt);
 
-	while (l < h && r < len * px_sz) {
-		bl = brightness(src + l, ch_sz);
-		br = brightness(src + r, ch_sz);
-		if (opt->compare(bl, br)) { // <
+	while (l < h && r < lenp) {
+		bl = opt->value(src + l, ch_sz);
+		br = opt->value(src + r, ch_sz);
+		if (opt->compare(bl, br)) {
 			memcpy(dest + i, src + l, px_sz);
 			l += px_sz;
 		} else {
@@ -167,7 +76,7 @@ void sort_interval(
 		i += px_sz;
 	}
 
-	while (r < len * px_sz) {
+	while (r < lenp) {
 		memcpy(dest + i, src + r, px_sz);
 		r += px_sz;
 		i += px_sz;
@@ -182,17 +91,13 @@ void sort_pixels_row(
 {
 	int i_start = -1;
 	int qualified = 0;
-	int i, x, p, len, offset;
-	png_bytep buf = src->buffer;
+	int i, x, len, offset;
 	png_image png = dest->png;
+	png_bytep buf = src->buffer;
 
 	for (x = 0; x < png.width; x++) {
-		qualified = 0;
 		i = (y * png.width + x) * px_sz;
-		for (p = 0; !qualified && p < opt->pipeline_len; p++) {
-			qualified = opt->pipeline[p](buf + i, ch_sz, opt);
-		}
-
+		qualified = opt->qualified(buf + i, ch_sz, opt);
 		if (i_start < 0) {
 			if (qualified) i_start = x;
 			continue;
