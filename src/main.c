@@ -14,15 +14,45 @@ struct image {
 	png_bytep buffer;
 };
 
+int is_white(png_bytep p, int ch_sz)
+{
+	u_int16_t r = *p;
+	u_int16_t g = *(p + ch_sz);
+	u_int16_t b = *(p + ch_sz * 2);
+	return r == 255 && g == 255 && b == 255;
+}
 
-void read_image(struct image *i, struct options *opt)
+static int (*qualified)(png_bytep, png_bytep, int, struct options *);
+
+static int check_mask(
+	png_bytep p, png_bytep m, 
+	int ch_sz, struct options *opt)
+{
+	return is_white(m, ch_sz);
+}
+
+static int check_value(
+	png_bytep p, png_bytep m, 
+	int ch_sz, struct options *opt)
+{
+	return opt->qualified(p, ch_sz, opt);
+}
+
+static int check_both(
+	png_bytep p, png_bytep m, 
+	int ch_sz, struct options *opt)
+{
+	return is_white(m, ch_sz) && opt->qualified(p, ch_sz, opt);
+}
+
+void read_image(struct image *i, const char *file, png_uint_32 format)
 {
 	i->png.version = PNG_IMAGE_VERSION;
-	if (!png_image_begin_read_from_file(&i->png, opt->input_file)) {
+	if (!png_image_begin_read_from_file(&i->png, file)) {
 		die("read_image(): %s\n", i->png.message);
 	}
 
-	i->png.format = opt->format;
+	i->png.format = format;
 	i->png.flags = i->png.flags | PNG_FORMAT_FLAG_LINEAR;
 	i->buffer = malloc(PNG_IMAGE_SIZE(i->png));
 
@@ -86,22 +116,22 @@ void sort_interval(png_bytep src, png_bytep dest,
 void sort_pixels_row(
 	struct image *src, 
 	struct image *dest,
+	struct image *mask,
 	int y, int px_sz, int ch_sz,
 	struct options *opt)
 {
 	int i_start = -1;
-	int qualified = 0;
-	int i, x, len, offset;
+	int i, x, q, len, offset;
 	png_image png = dest->png;
 	png_bytep buf = src->buffer;
 
 	for (x = 0; x < png.width; x++) {
 		i = (y * png.width + x) * px_sz;
-		qualified = opt->qualified(buf + i, ch_sz, opt);
+		q = qualified(buf + i, mask->buffer + i, ch_sz, opt);
 		if (i_start < 0) {
-			if (qualified) i_start = x;
+			if (q) i_start = x;
 			continue;
-		} else if (qualified && x != png.width - 1) {
+		} else if (q && x != png.width - 1) {
 		       	continue;
 		}
 
@@ -118,7 +148,11 @@ void sort_pixels_row(
 	}
 }
 
-void sort_pixels(struct image *s, struct image *d, struct options *opt)
+void sort_pixels(
+	struct image *s, 
+	struct image *d, 
+	struct image *m,
+	struct options *opt)
 {
 	d->png.version = PNG_IMAGE_VERSION;
 	d->png.width = s->png.width;
@@ -136,7 +170,7 @@ void sort_pixels(struct image *s, struct image *d, struct options *opt)
 
 	for (int y = 0; y < d->png.height; y++) {
 		printf("sorting row %i(%i)\n", y + 1, d->png.height);
-		sort_pixels_row(s, d, y, pixel_sz, channel_sz, opt);
+		sort_pixels_row(s, d, m, y, pixel_sz, channel_sz, opt);
 	}
 }
 
@@ -160,18 +194,36 @@ int main(int argc, char **argv)
 {
 	struct image src;
 	struct image dest;
+	struct image mask;
 	struct options opt;
 
 	memset(&opt, 0, sizeof(opt));
 	memset(&src, 0, sizeof(src));
 	memset(&dest, 0, sizeof(dest));
+	memset(&mask, 0, sizeof(mask));
 
 	parse_options(argc, argv, &opt);
 
-	read_image(&src, &opt);
-	sort_pixels(&src, &dest, &opt);
+	qualified = check_value;
+	read_image(&src, opt.input_file, opt.format);
+	if (opt.mask_file) {
+		read_image(&mask, opt.mask_file, opt.format);
+		qualified = opt.pipeline_len > 0 ? check_both : check_mask;
+		if (mask.png.width != src.png.width
+			|| mask.png.height != src.png.height)
+		{
+			free_image(&src);
+			free_image(&mask);
+			die("fucked up mask\n");
+		}
+	}
+
+	sort_pixels(&src, &dest, &mask, &opt);
 	write_image(&dest, &opt);
 
+	if (opt.mask_file) {
+		free_image(&mask);
+	}
 	free_image(&dest);
 	free_image(&src);
 

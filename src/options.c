@@ -6,9 +6,11 @@
 #include "util.h"
 
 
-const char *opt_str = "raov:g:l:d:";
+const char *opt_str = "hraov:g:l:d:m:";
 static struct option long_opts[] = {
+	{ "help", no_argument, NULL, 'h' },
 	{ "mask", required_argument, NULL, 'm' },
+	{ "source", required_argument, NULL, 's' },
 	{ "destination", required_argument, NULL, 'd' },
 
 	{ "value", required_argument, NULL, 'v' },
@@ -39,8 +41,14 @@ void parse_options(int argc, char **argv, struct options *opt)
 	opt->qualified = qualified_or;
 	while ((c = getopt_long(argc, argv, opt_str, long_opts, &i)) > 0) 
 	switch (c) {
+	case 's':
+		opt->input_file = optarg;
+		break;
 	case 'd':
 		opt->output_file = optarg;
+		break;
+	case 'm':
+		opt->mask_file = optarg;
 		break;
 	case 'g':
 		if (opt->pipeline_len < 2) {
@@ -78,19 +86,24 @@ void parse_options(int argc, char **argv, struct options *opt)
 		break;
 	}
 
-	// no output file
-	if (!opt->output_file || optind >= argc) {
+	if (!opt->output_file) {
 		die("usage: todo\n");
 	}
 
+	if (!opt->input_file) {
+		if (optind >= argc) {
+			die("usage: todo\n");
+		};
+		opt->input_file = argv[optind];
+	}
+
 	// no pipeline specified
-	if (opt->pipeline_len < 1) {
+	if (opt->pipeline_len < 1 && !opt->mask_file) {
 		// die("usage: todo\n");
 		die("what the fuck are you doing....\n");
 	}
 
 	opt->format = PNG_FORMAT_RGBA;
-	opt->input_file = argv[optind];
 }
 
 static double brightness(png_bytep p, int ch_sz)
@@ -103,17 +116,35 @@ static double brightness(png_bytep p, int ch_sz)
 
 static double red(png_bytep p, int ch_sz)
 {
-	return (u_int16_t)*p;
+	u_int16_t r = *p;
+	u_int16_t g = *(p + ch_sz);
+	u_int16_t b = *(p + ch_sz * 2);
+	if (r < b || r < g) {
+		return 0;
+	}
+	return 0.2126*r + 0.7152*g + 0.0722*b;
 }
 
 static double green(png_bytep p, int ch_sz)
 {
-	return (u_int16_t)*(p + ch_sz);
+	u_int16_t r = *p;
+	u_int16_t g = *(p + ch_sz);
+	u_int16_t b = *(p + ch_sz * 2);
+	if (g < b || g < r) {
+		return 0;
+	}
+	return 0.2126*r + 0.7152*g + 0.0722*b;
 }
 
 static double blue(png_bytep p, int ch_sz)
 {
-	return (u_int16_t)*(p + ch_sz*2);
+	u_int16_t r = *p;
+	u_int16_t g = *(p + ch_sz);
+	u_int16_t b = *(p + ch_sz * 2);
+	if (b < g || b < r) {
+		return 0;
+	}
+	return 0.2126*r + 0.7152*g + 0.0722*b;
 }
 
 static int compare_left(double left, double right)
